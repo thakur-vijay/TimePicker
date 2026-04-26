@@ -21,9 +21,6 @@ import SwiftUI
 @available(iOS 17.0, *)
 public struct TimePicker: View {
     
-    /// The background style applied to the picker container.
-    var style: AnyShapeStyle
-    
     /// The binding representing the selected hour value.
     @Binding var hours: Int
     
@@ -36,64 +33,123 @@ public struct TimePicker: View {
     /// Creates a new instance of `TimePicker`.
     ///
     /// - Parameters:
-    ///   - style: The visual style for the picker background. Defaults to `.bar`.
     ///   - hours: A binding to the selected hour value.
     ///   - minutes: A binding to the selected minute value.
     ///   - seconds: A binding to the selected second value.
     public init(
-        style: AnyShapeStyle = .init(.bar),
         hours: Binding<Int>,
         minutes: Binding<Int>,
         seconds: Binding<Int>
     ) {
-        self.style = style
         self._hours = hours
         self._minutes = minutes
         self._seconds = seconds
     }
     
+    /// Dynamically selects indicator configuration based on iOS version.
+    /// Uses `.liquid` style on iOS 26+ for modern appearance,
+    /// falls back to `.flatten` for compatibility.
+    private var configuration: IndicatorConfiguration = {
+        if #available(iOS 26, *) {
+            return .liquid
+        } else {
+            return .flatten
+        }
+    }()
+    
     /// The content and layout of the time picker.
     public var body: some View {
         HStack(spacing: 0) {
-            CustomView("hours", 0...24, $hours)
-            CustomView("mins", 0...60, $minutes)
-            CustomView("secs", 0...60, $seconds)
+            Column(.hours, selection: $hours)
+            Column(.minutes, selection: $minutes)
+            Column(.seconds, selection: $seconds)
         }
-        .offset(x: -25)
+        .offset(x: -22)
         .background {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(style)
+            configuration.shape
+                .fill(configuration.style)
                 .frame(height: 35)
         }
         .padding(.horizontal, 15)
     }
-  
-    /// A helper view builder that creates an individual picker (hours, minutes, or seconds).
-    ///
-    /// - Parameters:
-    ///   - title: The label displayed beside the picker.
-    ///   - range: The range of selectable values.
-    ///   - selection: The binding representing the selected value.
-    @ViewBuilder
-    private func CustomView(
-        _ title: String,
-        _ range: ClosedRange<Int>,
-        _ selection: Binding<Int>
-    ) -> some View {
-        PickerWithoutIndicator(selection: selection) {
-            ForEach(range, id: \.self) { value in
-                Text("\(value)")
-                    .frame(width: 35, alignment: .trailing)
-                    .tag(value)
+}
+
+@available(iOS 17.0, *)
+private extension TimePicker {
+    
+    /// A single column component representing one time unit (hours, minutes, or seconds).
+    /// Combines a number picker with an overlay showing the localized unit symbol.
+    struct Column: View {
+        let timeUnit: TimeUnit
+        @Binding var selection: Int
+        
+        init(
+            _ timeUnit: TimeUnit,
+            selection: Binding<Int>,
+        ) {
+            self.timeUnit = timeUnit
+            self._selection = selection
+        }
+        
+        var body: some View {
+            PickerWithoutIndicator(selection: $selection) {
+                ForEach(timeUnit.range, id: \.self) { value in
+                    Text(value.formatted())
+                        .frame(width: 35, alignment: .trailing)
+                        .tag(value)
+                }
+            }
+            .overlay {
+                let symbol = timeUnit.localizedSymbol(selection)
+                Text(symbol)
+                    // Referenced the font style of the system application "Clock - Timers"
+                    .font(.system(size: 16))
+                    .fontWeight(.semibold)
+                    .frame(width: 50, alignment: .leading)
+                    .lineLimit(1)
+                    .offset(x: 46)
+                    .animation(.smooth, value: symbol)
             }
         }
-        .overlay {
-            Text(title)
-                .font(.callout.bold())
-                .frame(width: 50, alignment: .leading)
-                .lineLimit(1)
-                .offset(x: 50)
+    }
+}
+
+@available(iOS 17.0, *)
+public extension TimePicker {
+    
+    @MainActor
+    struct IndicatorConfiguration {
+        public var shape: AnyShape
+        public var style: AnyShapeStyle
+        
+        public init<S: Shape, SS: ShapeStyle>(shape: S, style: SS) {
+            self.shape = .init(shape)
+            self.style = .init(style)
         }
+        
+        /// The style before iOS 26.
+        public static let flatten: Self = .init(
+            shape: .rect(cornerRadius: 10),
+            style: .bar,
+        )
+        
+        /// The style of iOS 26.
+        public static let liquid: Self = .init(shape: .capsule, style: .bar)
+    }
+    
+    /// Applies a custom indicator style configuration.
+    func indicatorStyle(_ configuration: IndicatorConfiguration) -> Self {
+        var content = self
+        content.configuration = configuration
+        return content
+    }
+    
+    /// Applies a custom indicator style.
+    func indicatorStyle<S: Shape, SS: ShapeStyle>(
+        _ style: SS = .bar,
+        in shape: S = .rect(cornerRadius: 10),
+    ) -> Self {
+        indicatorStyle(.init(shape: shape, style: style))
     }
 }
 
@@ -105,8 +161,10 @@ public extension View {
     /// Presents a `TimePicker` as a sheet over the current view.
     ///
     /// - Parameters:
+    ///   - confirmText: Localized string resource of confirm button title.
     ///   - isPresented: A binding that controls the visibility of the sheet.
-    ///   - style: The visual style for the picker background. Defaults to `.bar`.
+    ///   - shape: The visual shape for the picker indicator background.
+    ///   - style: The visual style for the picker indicator background. Defaults to `.bar`.
     ///   - hours: A binding to the selected hour value.
     ///   - minutes: A binding to the selected minute value.
     ///   - seconds: A binding to the selected second value.
@@ -129,16 +187,18 @@ public extension View {
     /// )
     /// ```
     @ViewBuilder
-    func timePicker(
+    func timePicker<S: Shape, SS: ShapeStyle>(
+        _ confirmText: LocalizedStringResource = "Done",
         isPresented: Binding<Bool>,
-        style: AnyShapeStyle = .init(.bar),
+        shape: S = .rect(cornerRadius: 10),
+        style: SS = .bar,
         hours: Binding<Int>,
         minutes: Binding<Int>,
         seconds: Binding<Int>
     ) -> some View {
         self.sheet(isPresented: isPresented) {
             VStack {
-                Button("Done") {
+                Button(confirmText) {
                     isPresented.wrappedValue = false
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -146,11 +206,11 @@ public extension View {
                 .padding(.trailing, 25)
                 
                 TimePicker(
-                    style: style,
                     hours: hours,
                     minutes: minutes,
                     seconds: seconds
                 )
+                .indicatorStyle(style, in: shape)
             }
             .presentationDetents([.height(250)])
         }
@@ -178,8 +238,8 @@ fileprivate struct PickerWithoutIndicator<Content: View, Selection: Hashable>: V
                 RemovePickerIndicator {
                     isHidden = true
                 }
-            }else {
-            content
+            } else {
+                content
             }
         }
         .pickerStyle(.wheel)
@@ -223,4 +283,13 @@ fileprivate extension UIView {
         }
         return superview?.pickerView
     }
+}
+
+@available(iOS 17.0, *)
+#Preview {
+    @Previewable @State var hours = 0
+    @Previewable @State var minutes = 0
+    @Previewable @State var seconds = 0
+    
+    TimePicker(hours: $hours, minutes: $minutes, seconds: $seconds)
 }
